@@ -1,0 +1,40 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <title>PVMG Case Log Reconciliation</title>
+  <style>
+    html, body { margin: 0; padding: 0; height: 100%; overflow: hidden; }
+    iframe { border: none; width: 100%; height: 100vh; display: block; }
+  </style>
+</head>
+<body>
+  <!-- IMPORTANT: replace with your actual deployed Apps Script URL (must match
+       GOOGLE_REDIRECT_URI in index.html and the URL you registered in Cloud
+       Console) -->
+  <iframe id="appFrame" src="https://YOUR-APPS-SCRIPT-URL-HERE/exec"></iframe>
+
+  <script>
+    // IMPORTANT: must match the origin the Apps Script URL above actually
+    // serves from — this is normally exactly "https://script.google.com"
+    // (no path, no trailing slash).
+    const APP_ORIGIN = 'https://script.google.com';
+
+    // If we arrived here carrying a token in our own URL fragment — meaning
+    // Code.gs just redirected the whole tab back to us after completing
+    // sign-in — forward that token into the iframe via postMessage once it's
+    // fully loaded, then scrub it from our own address bar immediately so it
+    // doesn't linger there any longer than necessary.
+    const hash = window.location.hash;
+    if (hash && hash.includes('token=')) {
+      const token = new URLSearchParams(hash.substring(1)).get('token');
+      history.replaceState(null, '', window.location.pathname);
+
+      const iframe = document.getElementById('appFrame');
+      iframe.addEventListener('load', function() {
+        iframe.contentWindow.postMessage({ type: 'pvmg_token', token: token }, APP_ORIGIN);
+      }, { once: true });
+    }
+  </script>
+</body>
+</html>
