@@ -78,6 +78,8 @@
         code_challenge_method: 'S256'
       });
 
+      console.log('[diag] redirect_uri being sent to Google:', getOwnUrl());
+
       try {
         const lastEmail = localStorage.getItem('pvmg_last_signin_email');
         if (lastEmail) params.set('login_hint', lastEmail);
