@@ -94,13 +94,17 @@
     function startExchangeViaHiddenIframe(code) {
       const verifier = sessionStorage.getItem('pvmg_pkce_verifier') || '';
       sessionStorage.removeItem('pvmg_pkce_verifier');
+      console.log('[diag] starting hidden-iframe exchange, code present:', !!code, 'verifier present:', !!verifier);
 
       const params = new URLSearchParams({ code: code, action: 'exchange' });
       if (verifier) params.set('verifier', verifier);
 
       const hiddenFrame = document.createElement('iframe');
       hiddenFrame.style.display = 'none';
+      hiddenFrame.onload = function() { console.log('[diag] hidden iframe finished loading'); };
+      hiddenFrame.onerror = function() { console.log('[diag] hidden iframe failed to load'); };
       hiddenFrame.src = APP_BASE_URL + '?' + params.toString();
+      console.log('[diag] hidden iframe src:', hiddenFrame.src);
       document.body.appendChild(hiddenFrame);
     }
 
@@ -159,9 +163,11 @@
     // exchange immediately — this runs automatically with no click required,
     // since this page (unlike Apps Script content) has no such restriction.
     (function init() {
+      console.log('[diag] init() running, full search string:', window.location.search);
       const params = new URLSearchParams(window.location.search);
       const code = params.get('code');
       const error = params.get('error');
+      console.log('[diag] init() parsed — code:', code ? code.substring(0, 15) + '...' : null, 'error:', error);
 
       if (code) {
         history.replaceState(null, '', getOwnUrl());
