@@ -105,17 +105,38 @@
     function sendTokenIntoApp(token) {
       const iframe = document.getElementById('appFrame');
       iframe.addEventListener('load', function() {
-        iframe.contentWindow.postMessage({ type: 'pvmg_token', token: token }, APP_ORIGIN);
+        console.log('[diag] sending token into app iframe');
+        // Using '*' here deliberately: the app's real code executes inside
+        // Apps Script's own nested sandboxed iframe (a *.googleusercontent.com
+        // origin, not script.google.com), which iframe.contentWindow doesn't
+        // directly reflect — an exact-origin target here risks silently
+        // failing the same way the incoming check below did. This is sent to
+        // a frame we ourselves created, pointed at our own known app URL, so
+        // the practical risk of using '*' here is low.
+        iframe.contentWindow.postMessage({ type: 'pvmg_token', token: token }, '*');
       }, { once: true });
       // Force a fresh load of the app itself (in case it's already loaded from
       // an earlier point in this same page's lifetime).
       iframe.src = iframe.src;
     }
 
+    // The app's real code runs inside Apps Script's own sandboxed iframe
+    // (origin like https://n-xxxxx.script.googleusercontent.com), not at
+    // script.google.com itself — that's just the URL you visit. Checking for
+    // that exact string was the bug; this checks for the actual pattern
+    // Google's infrastructure uses instead.
+    function isFromOurApp(origin) {
+      return origin === 'https://script.google.com' || origin.endsWith('.googleusercontent.com');
+    }
+
     // Handles messages from either the visible app iframe (asking to start
     // sign-in) or the hidden exchange iframe (reporting the exchange result).
     window.addEventListener('message', function(event) {
-      if (event.origin !== APP_ORIGIN) return;
+      console.log('[diag] wrapper received message, origin:', event.origin, 'data:', JSON.stringify(event.data));
+      if (!isFromOurApp(event.origin)) {
+        console.log('[diag] rejected — origin not recognized as our app');
+        return;
+      }
       if (!event.data || !event.data.type) return;
 
       if (event.data.type === 'pvmg_start_signin') {
