@@ -4,37 +4,151 @@
   <meta charset="UTF-8">
   <title>PVMG Case Log Reconciliation</title>
   <style>
-    html, body { margin: 0; padding: 0; height: 100%; overflow: hidden; }
+    html, body { margin: 0; padding: 0; height: 100%; overflow: hidden; background: #0f2540; }
     iframe { border: none; width: 100%; height: 100vh; display: block; }
   </style>
 </head>
 <body>
-  <!-- IMPORTANT: replace with your actual deployed Apps Script URL (must match
-       GOOGLE_REDIRECT_URI in index.html and the URL you registered in Cloud
-       Console) -->
+  <!-- IMPORTANT: replace with your actual deployed Apps Script URL -->
   <iframe id="appFrame" src="https://script.google.com/macros/s/AKfycbzi-VAWI2nQZ7xJivx2M9QAykTfFc5rET8i4cmwHcdmHtaemdstR44exZIiYvKZSN27-A/exec"></iframe>
 
   <script>
+    // ============================================================
+    // This wrapper page owns the Google sign-in redirect (Google comes back
+    // straight here, never through Apps Script — no click-requiring page in
+    // between). The actual code-for-token exchange still happens server-side
+    // in Code.gs (keeping the Client Secret safely off the client), reached
+    // via a hidden iframe rather than fetch() — Apps Script's ContentService
+    // has no way to add the CORS header fetch() would need, so a hidden
+    // iframe + postMessage is used instead, which needs no CORS at all and
+    // isn't a "navigation" in the sense that requires a click.
+    // ============================================================
+    const GOOGLE_CLIENT_ID = '804206427684-r0j0hehknrcj95aqocqn8k95jrubsiv4.apps.googleusercontent.com';
+    const GOOGLE_SCOPES = 'https://www.googleapis.com/auth/spreadsheets https://www.googleapis.com/auth/drive email profile';
+
     // IMPORTANT: must match the origin the Apps Script URL above actually
     // serves from — this is normally exactly "https://script.google.com"
     // (no path, no trailing slash).
     const APP_ORIGIN = 'https://script.google.com';
 
-    // If we arrived here carrying a token in our own URL fragment — meaning
-    // Code.gs just redirected the whole tab back to us after completing
-    // sign-in — forward that token into the iframe via postMessage once it's
-    // fully loaded, then scrub it from our own address bar immediately so it
-    // doesn't linger there any longer than necessary.
-    const hash = window.location.hash;
-    if (hash && hash.includes('token=')) {
-      const token = new URLSearchParams(hash.substring(1)).get('token');
-      history.replaceState(null, '', window.location.pathname);
+    // The base Apps Script URL (same as the visible iframe's src) — reused to
+    // build the hidden exchange iframe's URL.
+    const APP_BASE_URL = document.getElementById('appFrame').getAttribute('src');
 
+    // This page's own URL, without any query string — used as the OAuth
+    // redirect_uri (must be registered in Cloud Console exactly) and to
+    // clean up the address bar after handling a return trip from Google.
+    function getOwnUrl() {
+      return window.location.origin + window.location.pathname;
+    }
+
+    function base64UrlEncode(buffer) {
+      const bytes = new Uint8Array(buffer);
+      let binary = '';
+      for (let i = 0; i < bytes.byteLength; i++) binary += String.fromCharCode(bytes[i]);
+      return btoa(binary).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+    }
+
+    function generateCodeVerifier() {
+      const array = new Uint8Array(32);
+      crypto.getRandomValues(array);
+      return base64UrlEncode(array.buffer);
+    }
+
+    async function generateCodeChallenge(verifier) {
+      const encoder = new TextEncoder();
+      const data = encoder.encode(verifier);
+      const digest = await crypto.subtle.digest('SHA-256', data);
+      return base64UrlEncode(digest);
+    }
+
+    // Called when the app (inside the visible iframe) asks us to begin sign-in.
+    async function startSignInFlow() {
+      const verifier = generateCodeVerifier();
+      const challenge = await generateCodeChallenge(verifier);
+      sessionStorage.setItem('pvmg_pkce_verifier', verifier);
+
+      const params = new URLSearchParams({
+        client_id: GOOGLE_CLIENT_ID,
+        redirect_uri: getOwnUrl(),
+        response_type: 'code',
+        scope: GOOGLE_SCOPES,
+        include_granted_scopes: 'true',
+        code_challenge: challenge,
+        code_challenge_method: 'S256'
+      });
+
+      try {
+        const lastEmail = localStorage.getItem('pvmg_last_signin_email');
+        if (lastEmail) params.set('login_hint', lastEmail);
+      } catch (e) {}
+
+      window.location.href = 'https://accounts.google.com/o/oauth2/v2/auth?' + params.toString();
+    }
+
+    // Kicks off the server-side exchange via a hidden iframe pointed at
+    // Code.gs — its result arrives asynchronously through the message
+    // listener below (pvmg_token / pvmg_token_error), not a return value here.
+    function startExchangeViaHiddenIframe(code) {
+      const verifier = sessionStorage.getItem('pvmg_pkce_verifier') || '';
+      sessionStorage.removeItem('pvmg_pkce_verifier');
+
+      const params = new URLSearchParams({ code: code, action: 'exchange' });
+      if (verifier) params.set('verifier', verifier);
+
+      const hiddenFrame = document.createElement('iframe');
+      hiddenFrame.style.display = 'none';
+      hiddenFrame.src = APP_BASE_URL + '?' + params.toString();
+      document.body.appendChild(hiddenFrame);
+    }
+
+    function sendTokenIntoApp(token) {
       const iframe = document.getElementById('appFrame');
       iframe.addEventListener('load', function() {
         iframe.contentWindow.postMessage({ type: 'pvmg_token', token: token }, APP_ORIGIN);
       }, { once: true });
+      // Force a fresh load of the app itself (in case it's already loaded from
+      // an earlier point in this same page's lifetime).
+      iframe.src = iframe.src;
     }
+
+    // Handles messages from either the visible app iframe (asking to start
+    // sign-in) or the hidden exchange iframe (reporting the exchange result).
+    window.addEventListener('message', function(event) {
+      if (event.origin !== APP_ORIGIN) return;
+      if (!event.data || !event.data.type) return;
+
+      if (event.data.type === 'pvmg_start_signin') {
+        startSignInFlow();
+      } else if (event.data.type === 'pvmg_token' && event.data.token) {
+        sendTokenIntoApp(event.data.token);
+      } else if (event.data.type === 'pvmg_token_error') {
+        console.error('Sign-in failed:', event.data.error);
+        // The visible app iframe is already loaded in its normal signed-out
+        // state — the visitor can just try the button again.
+      }
+    });
+
+    // On load: if Google just redirected back to us with a code, start the
+    // exchange immediately — this runs automatically with no click required,
+    // since this page (unlike Apps Script content) has no such restriction.
+    (function init() {
+      const params = new URLSearchParams(window.location.search);
+      const code = params.get('code');
+      const error = params.get('error');
+
+      if (code) {
+        history.replaceState(null, '', getOwnUrl());
+        startExchangeViaHiddenIframe(code);
+        return;
+      }
+
+      if (error) {
+        history.replaceState(null, '', getOwnUrl());
+        // Declined or failed on Google's side — nothing to do, the visible
+        // iframe already loads the app in its normal signed-out state.
+      }
+    })();
   </script>
 </body>
 </html>
