@@ -104,22 +104,21 @@
       document.body.appendChild(hiddenFrame);
     }
 
-    function sendTokenIntoApp(token) {
-      const iframe = document.getElementById('appFrame');
-      iframe.addEventListener('load', function() {
-        console.log('[diag] sending token into app iframe');
-        // Using '*' here deliberately: the app's real code executes inside
-        // Apps Script's own nested sandboxed iframe (a *.googleusercontent.com
-        // origin, not script.google.com), which iframe.contentWindow doesn't
-        // directly reflect — an exact-origin target here risks silently
-        // failing the same way the incoming check below did. This is sent to
-        // a frame we ourselves created, pointed at our own known app URL, so
-        // the practical risk of using '*' here is low.
-        iframe.contentWindow.postMessage({ type: 'pvmg_token', token: token }, '*');
-      }, { once: true });
-      // Force a fresh load of the app itself (in case it's already loaded from
-      // an earlier point in this same page's lifetime).
-      iframe.src = iframe.src;
+    // Delivering the token directly to the exact window that asked for
+    // sign-in (via event.source, captured from its own "ready" ping) rather
+    // than guessing which nested Apps Script frame to target — the app's
+    // real code runs one level deeper than iframe.contentWindow reflects, so
+    // targeting it that way silently never arrived. Order-independent: the
+    // token can arrive before or after the app's ready ping.
+    let pendingToken = null;
+    let currentAppSource = null;
+
+    function tryDeliverToken() {
+      if (pendingToken && currentAppSource) {
+        console.log('[diag] delivering token directly to app via event.source');
+        currentAppSource.postMessage({ type: 'pvmg_token', token: pendingToken }, '*');
+        pendingToken = null;
+      }
     }
 
     // The app's real code runs inside Apps Script's own sandboxed iframe
@@ -131,8 +130,8 @@
       return origin === 'https://script.google.com' || origin.endsWith('.googleusercontent.com');
     }
 
-    // Handles messages from either the visible app iframe (asking to start
-    // sign-in) or the hidden exchange iframe (reporting the exchange result).
+    // Handles messages from either the visible app iframe (ready ping, or
+    // asking to start sign-in) or the hidden exchange iframe (exchange result).
     window.addEventListener('message', function(event) {
       console.log('[diag] wrapper received message, origin:', event.origin, 'data:', JSON.stringify(event.data));
       if (!isFromOurApp(event.origin)) {
@@ -141,10 +140,14 @@
       }
       if (!event.data || !event.data.type) return;
 
-      if (event.data.type === 'pvmg_start_signin') {
+      if (event.data.type === 'pvmg_app_ready') {
+        currentAppSource = event.source;
+        tryDeliverToken();
+      } else if (event.data.type === 'pvmg_start_signin') {
         startSignInFlow();
       } else if (event.data.type === 'pvmg_token' && event.data.token) {
-        sendTokenIntoApp(event.data.token);
+        pendingToken = event.data.token;
+        tryDeliverToken();
       } else if (event.data.type === 'pvmg_token_error') {
         console.error('Sign-in failed:', event.data.error);
         // The visible app iframe is already loaded in its normal signed-out
