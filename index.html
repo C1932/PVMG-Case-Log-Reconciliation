@@ -63,7 +63,8 @@
     }
 
     // Called when the app (inside the visible iframe) asks us to begin sign-in.
-    async function startSignInFlow() {
+    async function startSignInFlow(options) {
+      options = options || {};
       const verifier = generateCodeVerifier();
       const challenge = await generateCodeChallenge(verifier);
       sessionStorage.setItem('pvmg_pkce_verifier', verifier);
@@ -84,6 +85,15 @@
         const lastEmail = localStorage.getItem('pvmg_last_signin_email');
         if (lastEmail) params.set('login_hint', lastEmail);
       } catch (e) {}
+
+      if (options.silent) {
+        // No UI shown at all — succeeds instantly and invisibly if the
+        // visitor is still signed into Google in this browser and has
+        // already granted access before; otherwise Google redirects back
+        // with an error and nothing is shown to them at all.
+        params.set('prompt', 'none');
+        sessionStorage.setItem('pvmg_attempting_silent', 'true');
+      }
 
       window.location.href = 'https://accounts.google.com/o/oauth2/v2/auth?' + params.toString();
     }
@@ -149,6 +159,8 @@
         tryDeliverToken();
       } else if (event.data.type === 'pvmg_start_signin') {
         startSignInFlow();
+      } else if (event.data.type === 'pvmg_remember_email' && event.data.email) {
+        try { localStorage.setItem('pvmg_last_signin_email', event.data.email); } catch (e) {}
       } else if (event.data.type === 'pvmg_token' && event.data.token) {
         pendingToken = event.data.token;
         tryDeliverToken();
@@ -169,6 +181,9 @@
       const error = params.get('error');
       console.log('[diag] init() parsed — code:', code ? code.substring(0, 15) + '...' : null, 'error:', error);
 
+      const wasSilentAttempt = sessionStorage.getItem('pvmg_attempting_silent') === 'true';
+      sessionStorage.removeItem('pvmg_attempting_silent');
+
       if (code) {
         history.replaceState(null, '', getOwnUrl());
         startExchangeViaHiddenIframe(code);
@@ -177,8 +192,28 @@
 
       if (error) {
         history.replaceState(null, '', getOwnUrl());
+        if (wasSilentAttempt) {
+          // Don't keep retrying a silent sign-in that isn't working on every
+          // page load within this same browser session — falls back to the
+          // normal button instead, same as if we'd never tried.
+          console.log('[diag] silent sign-in attempt failed:', error);
+          sessionStorage.setItem('pvmg_silent_failed', 'true');
+        }
         // Declined or failed on Google's side — nothing to do, the visible
         // iframe already loads the app in its normal signed-out state.
+        return;
+      }
+
+      // A fresh visit, not a redirect-back — if we remember a previous
+      // visitor and haven't already failed a silent attempt this session,
+      // try signing them in invisibly before ever showing the button.
+      let lastEmail = null;
+      try { lastEmail = localStorage.getItem('pvmg_last_signin_email'); } catch (e) {}
+      const alreadyFailedThisSession = sessionStorage.getItem('pvmg_silent_failed') === 'true';
+
+      if (lastEmail && !alreadyFailedThisSession) {
+        console.log('[diag] attempting silent sign-in for', lastEmail);
+        startSignInFlow({ silent: true });
       }
     })();
   </script>
