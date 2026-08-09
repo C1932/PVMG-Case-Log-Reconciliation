@@ -79,7 +79,6 @@
         code_challenge_method: 'S256'
       });
 
-      console.log('[diag] redirect_uri being sent to Google:', getOwnUrl());
 
       try {
         const lastEmail = localStorage.getItem('pvmg_last_signin_email');
@@ -104,17 +103,13 @@
     function startExchangeViaHiddenIframe(code) {
       const verifier = sessionStorage.getItem('pvmg_pkce_verifier') || '';
       sessionStorage.removeItem('pvmg_pkce_verifier');
-      console.log('[diag] starting hidden-iframe exchange, code present:', !!code, 'verifier present:', !!verifier);
 
       const params = new URLSearchParams({ code: code, action: 'exchange' });
       if (verifier) params.set('verifier', verifier);
 
       const hiddenFrame = document.createElement('iframe');
       hiddenFrame.style.display = 'none';
-      hiddenFrame.onload = function() { console.log('[diag] hidden iframe finished loading'); };
-      hiddenFrame.onerror = function() { console.log('[diag] hidden iframe failed to load'); };
       hiddenFrame.src = APP_BASE_URL + '?' + params.toString();
-      console.log('[diag] hidden iframe src:', hiddenFrame.src);
       document.body.appendChild(hiddenFrame);
     }
 
@@ -129,7 +124,6 @@
 
     function tryDeliverToken() {
       if (pendingToken && currentAppSource) {
-        console.log('[diag] delivering token directly to app via event.source');
         currentAppSource.postMessage({ type: 'pvmg_token', token: pendingToken }, '*');
         pendingToken = null;
       }
@@ -147,9 +141,7 @@
     // Handles messages from either the visible app iframe (ready ping, or
     // asking to start sign-in) or the hidden exchange iframe (exchange result).
     window.addEventListener('message', function(event) {
-      console.log('[diag] wrapper received message, origin:', event.origin, 'data:', JSON.stringify(event.data));
       if (!isFromOurApp(event.origin)) {
-        console.log('[diag] rejected — origin not recognized as our app');
         return;
       }
       if (!event.data || !event.data.type) return;
@@ -175,11 +167,9 @@
     // exchange immediately — this runs automatically with no click required,
     // since this page (unlike Apps Script content) has no such restriction.
     (function init() {
-      console.log('[diag] init() running, full search string:', window.location.search);
       const params = new URLSearchParams(window.location.search);
       const code = params.get('code');
       const error = params.get('error');
-      console.log('[diag] init() parsed — code:', code ? code.substring(0, 15) + '...' : null, 'error:', error);
 
       const wasSilentAttempt = sessionStorage.getItem('pvmg_attempting_silent') === 'true';
       sessionStorage.removeItem('pvmg_attempting_silent');
@@ -196,7 +186,6 @@
           // Don't keep retrying a silent sign-in that isn't working on every
           // page load within this same browser session — falls back to the
           // normal button instead, same as if we'd never tried.
-          console.log('[diag] silent sign-in attempt failed:', error);
           sessionStorage.setItem('pvmg_silent_failed', 'true');
         }
         // Declined or failed on Google's side — nothing to do, the visible
@@ -212,7 +201,6 @@
       const alreadyFailedThisSession = sessionStorage.getItem('pvmg_silent_failed') === 'true';
 
       if (lastEmail && !alreadyFailedThisSession) {
-        console.log('[diag] attempting silent sign-in for', lastEmail);
         startSignInFlow({ silent: true });
       }
     })();
